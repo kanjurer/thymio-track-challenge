@@ -1,0 +1,330 @@
+<!DOCTYPE aesl-source>
+<network>
+
+
+<!--list of global events-->
+
+
+<!--list of constants-->
+<constant value="4000" name="SENSOR_THRESHOLD"/>
+<constant value="0" name="STOPPED"/>
+<constant value="1" name="FORWARD"/>
+<constant value="2" name="REVERSE"/>
+<constant value="3" name="TURN"/>
+<constant value="4" name="SENSE"/>
+<constant value="5" name="HARDCODED_MOTION_STRAIGHT"/>
+<constant value="6" name="HARDCODED_MOTION_TURN"/>
+<constant value="7" name="THREE_LINES"/>
+<constant value="8" name="SELECTING_LINE"/>
+<constant value="9" name="FINAL_TURN"/>
+<constant value="10" name="DETECTIVE"/>
+<constant value="100" name="DEAD_END"/>
+<constant value="101" name="LEFT"/>
+<constant value="102" name="RIGHT"/>
+<constant value="1001" name="GATE_OPEN_LEFT"/>
+<constant value="1002" name="GATE_OPEN_RIGHT"/>
+<constant value="10000" name="WHITE"/>
+<constant value="10001" name="RED"/>
+<constant value="10002" name="BLUE"/>
+<constant value="10003" name="GREEN"/>
+<constant value="3300" name="SENSOR_STOP_THRESHOLD"/>
+
+
+<!--show keywords state-->
+<keywords flag="true"/>
+
+
+<!--node thymio-II-->
+<node nodeId="1" name="thymio-II">var counter = 0 # counter to keep track of the bar code
+var state = STOPPED # robot's state
+var select_line_counter = 0 # 
+var sensor[3] = [0,0,0] # sensor readings for bar code
+var direction # which direction should robot go next on reading bar code
+var gate_open # which gate is open - determined after reading second bar code
+var color = WHITE # color of the leds when robot reaches the final bullseye
+var find_bullseye = 0 # 
+
+# resetting
+motor.left.target = 0
+motor.right.target = 0
+timer.period[0] = 0
+
+
+# forward button
+onevent button.forward
+	callsub drive_forward
+	
+# back button
+onevent button.backward
+	callsub stop
+
+onevent prox 
+	if state == HARDCODED_MOTION_TURN then #detecting the line
+		if prox.ground.delta[0] &lt; 500 or prox.ground.delta[1] &lt; 500 then # stopping at 3 lines
+			callsub three_lines
+		end
+	elseif state == FORWARD and counter &lt; 3 then #sensing the line to read bar code
+		if prox.ground.delta[0] &lt; 500 or prox.ground.delta[1] &lt; 500 then
+			callsub equalize
+		end
+	elseif state == FORWARD or state == FINAL_TURN and select_line_counter == 2 then # following line 
+		callsub line_follow
+	elseif state == DETECTIVE then # finding bullseye
+		if prox.ground.delta[0] &lt; 300 or prox.ground.delta[1] &lt; 300 then
+			callsub color_me # coloring
+			callsub stop # stop
+		end
+	end
+	
+	# sensing the bar code
+	if counter &lt; 3 and (prox.horizontal[0] > SENSOR_STOP_THRESHOLD or prox.horizontal[4] > SENSOR_STOP_THRESHOLD) and prox.horizontal[2] > 3000 and state !=STOPPED and state != TURN then
+		callsub sense_T
+	end
+
+
+# timer event
+onevent timer0 
+	timer.period[0] = 0
+	if state == REVERSE then
+		callsub reverse_and_turn
+	elseif state == TURN then
+	counter++
+		callsub drive_forward
+		if counter == 3 then
+			callsub hardcoded_motion
+		end
+	elseif state == THREE_LINES then
+		callsub select_line
+	elseif state == HARDCODED_MOTION_STRAIGHT then
+		callsub hardcoded_motion
+	elseif  state == SELECTING_LINE then
+		if select_line_counter == 1 then
+			callsub select_line
+		elseif select_line_counter == 2 then
+			callsub drive_forward
+		end
+	elseif state == DETECTIVE then
+		callsub detective
+	end
+	
+onevent timer1
+	timer.period[1] = 0
+	find_bullseye = 5
+
+# after robot detects robot, it should reverse and turn	
+sub reverse_and_turn
+	if state == SENSE then
+		state = REVERSE
+		motor.left.target = -300
+		motor.right.target = -300
+		timer.period[0] = 26 #reverse for t ms
+	elseif state == REVERSE then
+		state = TURN
+		if direction == LEFT then
+			if counter == 0 then
+				timer.period[0] = 1260 #turn time for t ms on first bar code
+			else
+				timer.period[0] = 1230 # turn time for t ms on second bar code
+			end
+			motor.left.target = -200
+			motor.right.target = 200
+		elseif direction == RIGHT then
+			if counter == 0 then
+				timer.period[0] = 1150 #turn time for t ms on second bar code
+			else
+				timer.period[0] = 1250 # turn time for t ms on first bar code
+			end
+			motor.left.target = 200
+			motor.right.target = -200
+		end
+	end
+	
+					
+# driving forward	 
+sub drive_forward
+	state = FORWARD
+	motor.left.target = 300
+	motor.right.target = 300
+
+# stoppping robot	
+sub stop 
+	state = STOPPED
+	motor.left.target = 0
+	motor.right.target = 0
+	counter = 0
+	select_line_counter = 0
+	sensor[0] = 0
+	sensor[1] = 0
+	sensor[2] = 0
+	direction = 0
+	gate_open = 0
+	color = WHITE 
+	find_bullseye = 0
+	timer.period[0] = 0
+	timer.period[1] = 0
+
+sub equalize
+	# left sensing more than right
+	if prox.ground.delta[0] > prox.ground.delta[1] then
+		motor.left.target = 60
+		motor.right.target = 25
+	end
+	#right sensing more than left
+	if prox.ground.delta[1] > prox.ground.delta[0] then
+		motor.left.target = 25
+		motor.right.target = 60
+	end
+	# both sensing equally
+	if prox.ground.delta[0]  == prox.ground.delta[1] then
+		motor.left.target = 60
+		motor.right.target = 60
+	end
+
+
+# sensing bar codes	
+sub sense_T
+	state = SENSE
+	sensor[0] = prox.horizontal[1]
+	sensor[1] = prox.horizontal[2]
+	sensor[2] = prox.horizontal[3]
+	#left
+	if counter == 0 then
+		if sensor[0] > SENSOR_THRESHOLD and sensor[1] &lt; SENSOR_THRESHOLD and sensor[2] &lt; SENSOR_THRESHOLD then
+			direction = LEFT
+		elseif sensor[0] &lt; SENSOR_THRESHOLD and sensor[1] &lt; SENSOR_THRESHOLD and sensor[2] > SENSOR_THRESHOLD then
+			direction = RIGHT
+		else
+			direction = RIGHT
+		end
+	end
+
+	if counter == 1 then
+		if sensor[0] > SENSOR_THRESHOLD and sensor[1] &lt; SENSOR_THRESHOLD and sensor[2] &lt; SENSOR_THRESHOLD then
+			gate_open = GATE_OPEN_LEFT
+		elseif sensor[0] &lt; SENSOR_THRESHOLD and sensor[1] &lt; SENSOR_THRESHOLD and sensor[2] > SENSOR_THRESHOLD then
+			gate_open = GATE_OPEN_RIGHT
+		end
+		if direction == LEFT then
+			direction = RIGHT
+		elseif direction == RIGHT then 
+			direction = LEFT
+		end 
+	elseif  counter==2 then
+		# just store it and call color_me later
+		callsub save_color
+	end
+	callsub reverse_and_turn
+	
+
+# saving color it reads in the third bar code						
+sub save_color
+	if sensor[0] > SENSOR_THRESHOLD and sensor[1] &lt; SENSOR_THRESHOLD and sensor[2] &lt; SENSOR_THRESHOLD then
+		color = RED
+	elseif sensor[0] &lt; SENSOR_THRESHOLD and sensor[1] > SENSOR_THRESHOLD and sensor[2] &lt; SENSOR_THRESHOLD then
+		color = GREEN
+	elseif sensor[0] &lt; SENSOR_THRESHOLD and sensor[1] &lt; SENSOR_THRESHOLD and sensor[2] > SENSOR_THRESHOLD then
+		color = BLUE
+	end
+
+# coloring the robot in chamber	
+sub color_me
+	if color == RED then
+		call leds.top(32,0,0) # red
+	elseif color == GREEN then
+		call leds.top(0,32,0) # green
+	elseif color == BLUE then
+		call leds.top(0,0,32) # blue
+	else
+		call leds.top(32,32,32) # failure mechanism
+	end	
+		
+# hardcoded motion to make robot land on three lines
+sub hardcoded_motion
+	if state == FORWARD  then
+		timer.period[0] = 1750 #going straight
+		state = HARDCODED_MOTION_STRAIGHT
+	elseif state == HARDCODED_MOTION_STRAIGHT then
+		state = HARDCODED_MOTION_TURN
+		timer.period[0] = 2350 #taking turn
+		if  direction == RIGHT then
+			motor.left.target = 300
+			motor.right.target = 500
+		elseif direction == LEFT then
+			motor.left.target = 500
+			motor.right.target = 300
+		end
+	end
+	
+# robot when it lands on three lines
+sub three_lines
+	state = THREE_LINES
+	motor.left.target = 0
+	motor.right.target = 0
+	timer.period[0] = 5000
+	call sound.freq(440,10)
+	call leds.top(32,0,0)
+
+# selecting which line to pick to go to chamber	
+sub select_line
+	state = SELECTING_LINE
+	select_line_counter++
+	call leds.top(0,0,0)
+	if select_line_counter == 1 then
+		timer.period[0] = 900 #first turn time
+		if gate_open == GATE_OPEN_LEFT then
+			motor.left.target = 500
+			motor.right.target = 300
+		elseif gate_open == GATE_OPEN_RIGHT then
+			motor.left.target = 300
+			motor.right.target = 500
+		end
+	elseif select_line_counter == 2  then 
+		timer.period[0] = 2900 #second turn time
+		if gate_open == GATE_OPEN_LEFT then
+			motor.left.target = 225
+			motor.right.target = 500
+		elseif gate_open == GATE_OPEN_RIGHT then
+			motor.left.target = 500
+			motor.right.target = 225
+		end
+	end
+
+# line follow
+sub line_follow
+    timer.period[1] = 12000
+	state = FINAL_TURN
+	if prox.ground.delta[0] > prox.ground.delta[1] then # left sensing more than right
+		motor.left.target = 240
+		motor.right.target = 26
+	elseif prox.ground.delta[1] > prox.ground.delta[0] then # right sensing more than left
+		motor.left.target = 25
+		motor.right.target = 240
+	elseif prox.ground.delta[0] == prox.ground.delta[1] then # both sensing equally
+		motor.left.target = 200
+		motor.right.target = 200
+	end
+	if prox.ground.delta[0] > 950 and prox.ground.delta[1] > 950 and find_bullseye == 5 then # line ends in room
+		callsub detective
+	end
+
+# finding the bullseye
+sub detective
+	state = DETECTIVE
+	if(find_bullseye == 5 and gate_open == GATE_OPEN_LEFT) then
+		motor.left.target= 500
+		motor.right.target = -500
+		timer.period[0] = 125
+		find_bullseye++
+	elseif find_bullseye == 5 and gate_open == GATE_OPEN_RIGHT then
+		motor.left.target= -500
+		motor.right.target = 500
+		timer.period[0] = 125
+		find_bullseye++
+	else
+		motor.left.target = 100
+		motor.right.target = 100
+	end
+	</node>
+
+
+</network>
